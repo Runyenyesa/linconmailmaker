@@ -13,7 +13,7 @@ const credentials = process.env.CREDENTIALS_JSON
 const { client_id, client_secret, redirect_uris } = credentials.web;
 
 const oauth2Client = new google.auth.OAuth2(
-  client_id, client_secret, 'http://localhost:3000/auth/callback'
+  client_id, client_secret, process.env.REDIRECT_URI || 'http://localhost:3000/auth/callback'
 );
 
 let userTokens = null;
