@@ -7,7 +7,9 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static('public'));
 
-const credentials = JSON.parse(fs.readFileSync('credentials.json'));
+const credentials = process.env.CREDENTIALS_JSON 
+  ? JSON.parse(process.env.CREDENTIALS_JSON)
+  : JSON.parse(fs.readFileSync('credentials.json'));
 const { client_id, client_secret, redirect_uris } = credentials.web;
 
 const oauth2Client = new google.auth.OAuth2(
