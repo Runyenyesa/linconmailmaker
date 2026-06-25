@@ -76,7 +76,8 @@
 
 <div class="container">
   <div class="tabs">
-    <div class="tab active" onclick="showTab('compose')"><i class="ti ti-send" style="margin-right:5px"></i>Compose</div>
+    <div class="tab active" onclick="showTab('compose')"><i class="ti ti-users" style="margin-right:5px"></i>Bulk Send</div>
+    <div class="tab" onclick="showTab('quick')"><i class="ti ti-send" style="margin-right:5px"></i>Quick Send</div>
     <div class="tab" onclick="showTab('schedule')"><i class="ti ti-clock" style="margin-right:5px"></i>Schedule</div>
     <div class="tab" onclick="showTab('history')"><i class="ti ti-history" style="margin-right:5px"></i>History</div>
   </div>
@@ -138,6 +139,31 @@
     </div>
     <div class="result-card" id="resultCard"><p><i class="ti ti-circle-check" style="vertical-align:-2px;margin-right:6px;"></i><strong id="resultText"></strong></p></div>
     <div class="error-card" id="errorCard"><p><i class="ti ti-alert-circle" style="vertical-align:-2px;margin-right:6px;"></i><span id="errorText"></span></p></div>
+  </div>
+
+  <!-- QUICK SEND TAB -->
+  <div id="tab-quick" class="tab-content">
+    <div class="card">
+      <div class="card-header"><div class="step-num"><i class="ti ti-send" style="font-size:14px"></i></div><h2>Quick Send — Individual emails</h2></div>
+      <p style="color:rgba(255,255,255,0.6);font-size:14px;margin-bottom:1rem;">Type email addresses manually, one per line. No CSV needed.</p>
+      <label>Recipients <span style="color:rgba(255,255,255,0.3);font-size:12px">— one email per line</span></label>
+      <textarea id="quickEmails" style="min-height:100px;font-family:monospace;font-size:13px;" placeholder="john@example.com
+sarah@example.com
+mike@example.com"></textarea>
+      <div id="quickEmailCount" style="font-size:12px;color:rgba(255,255,255,0.4);margin-top:4px;"></div>
+      <label>Email type</label>
+      <select id="quickEmailType"><option value="plain">Plain text</option><option value="html">HTML (rich formatting)</option></select>
+      <label>Subject</label>
+      <input type="text" id="quickSubject" placeholder="Your subject line..."/>
+      <label>Message body</label>
+      <textarea id="quickBody" placeholder="Write your message here..."></textarea>
+      <button class="send-btn" id="quickSendBtn" onclick="sendQuick()">
+        <i class="ti ti-send"></i> Send emails
+      </button>
+      <div class="progress-wrap" id="quickProgressWrap"><div class="progress-bg"><div class="progress-fill" id="quickProgressFill"></div></div><p class="progress-label" id="quickProgressLabel">Sending...</p></div>
+      <div class="result-card" id="quickResultCard" style="display:none"><p><i class="ti ti-circle-check" style="vertical-align:-2px;margin-right:6px;"></i><strong id="quickResultText"></strong></p></div>
+      <div class="error-card" id="quickErrorCard" style="display:none"><p><i class="ti ti-alert-circle" style="vertical-align:-2px;margin-right:6px;"></i><span id="quickErrorText"></span></p></div>
+    </div>
   </div>
 
   <!-- SCHEDULE TAB -->
@@ -259,7 +285,7 @@ async function sendEmails() {
     document.getElementById('progressLabel').textContent = 'Done!';
     if (data.sent > 0) {
       document.getElementById('resultCard').style.display = 'block';
-      document.getElementById('resultText').textContent = `${data.sent} email${data.sent>1?'s':''} sent!${data.failed>0?` (${data.failed} failed)`:''}`;
+      document.getElementById('resultText').textContent = `${data.sent} email${data.sent>1?'s':''} sent!${data.failed>0?` (${data.failed} failed)`:''}${data.skipped>0?` · ${data.skipped} skipped (already received this email)`:''}`;
       saveHistory(subject, recipients.length, data.sent, data.failed);
     } else {
       document.getElementById('errorCard').style.display = 'block';
@@ -350,6 +376,70 @@ function cancelScheduled(id) {
   localStorage.setItem('lm_scheduled', JSON.stringify(scheduled));
   renderScheduled();
 }
+
+// Live email count for quick send
+document.addEventListener('DOMContentLoaded', function() {
+  const qe = document.getElementById('quickEmails');
+  if (qe) {
+    qe.addEventListener('input', function() {
+      const emails = this.value.split('\n').map(e => e.trim()).filter(e => e.length > 0);
+      const counter = document.getElementById('quickEmailCount');
+      if (counter) counter.textContent = emails.length > 0 ? `${emails.length} recipient${emails.length > 1 ? 's' : ''} entered` : '';
+    });
+  }
+});
+
+async function sendQuick() {
+  const rawEmails = document.getElementById('quickEmails').value.trim();
+  const subject = document.getElementById('quickSubject').value.trim();
+  const body = document.getElementById('quickBody').value.trim();
+  const isHtml = document.getElementById('quickEmailType').value === 'html';
+
+  if (!rawEmails) { alert('Please enter at least one email address.'); return; }
+  if (!subject || !body) { alert('Please fill in subject and message.'); return; }
+
+  const emailList = rawEmails.split('\n')
+    .map(e => e.trim())
+    .filter(e => e.length > 0 && e.includes('@'));
+
+  if (emailList.length === 0) { alert('No valid email addresses found.'); return; }
+
+  const recipients = emailList.map(email => ({
+    email,
+    name: email.split('@')[0]
+  }));
+
+  document.getElementById('quickSendBtn').disabled = true;
+  document.getElementById('quickProgressWrap').style.display = 'block';
+  document.getElementById('quickResultCard').style.display = 'none';
+  document.getElementById('quickErrorCard').style.display = 'none';
+  document.getElementById('quickProgressFill').style.width = '30%';
+  document.getElementById('quickProgressLabel').textContent = `Sending to ${recipients.length} recipient${recipients.length > 1 ? 's' : ''}...`;
+
+  try {
+    const res = await fetch('/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipients, subject, body, isHtml, campaignKey: 'quick_' + Date.now() })
+    });
+    const data = await res.json();
+    document.getElementById('quickProgressFill').style.width = '100%';
+    document.getElementById('quickProgressLabel').textContent = 'Done!';
+    if (data.sent > 0) {
+      document.getElementById('quickResultCard').style.display = 'block';
+      document.getElementById('quickResultText').textContent = `${data.sent} email${data.sent > 1 ? 's' : ''} sent successfully!${data.failed > 0 ? ` (${data.failed} failed)` : ''}`;
+      saveHistory(subject, recipients.length, data.sent, data.failed);
+    } else {
+      document.getElementById('quickErrorCard').style.display = 'block';
+      document.getElementById('quickErrorText').textContent = 'All emails failed. Please re-authenticate and try again.';
+    }
+  } catch(err) {
+    document.getElementById('quickErrorCard').style.display = 'block';
+    document.getElementById('quickErrorText').textContent = 'Server error. Make sure the app is running.';
+  }
+  document.getElementById('quickSendBtn').disabled = false;
+}
+
 </script>
 </body>
 </html>
