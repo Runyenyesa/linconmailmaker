@@ -20,9 +20,7 @@ const oauth2Client = new google.auth.OAuth2(
 let userEmail = null;
 let userTokens = null;
 
-// Track sent emails per campaign
 const sentLog = {};
-
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.get('/auth', (req, res) => {
@@ -42,12 +40,9 @@ app.get('/auth/callback', async (req, res) => {
   const { tokens } = await oauth2Client.getToken(code);
   oauth2Client.setCredentials(tokens);
   userTokens = tokens;
-
-  // Get user email
   const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
   const { data } = await oauth2.userinfo.get();
   userEmail = data.email;
-
   res.redirect('/?authed=true');
 });
 
@@ -55,11 +50,10 @@ app.get('/auth/status', (req, res) => {
   res.json({ authed: userTokens !== null, email: userEmail });
 });
 
-// Send via Brevo API
 function sendViaBrevo(toEmail, toName, fromEmail, subject, body, isHtml) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({
-      sender: { name: fromEmail, email: fromEmail },
+      sender: { name: process.env.SENDER_NAME || fromEmail, email: fromEmail },
       to: [{ email: toEmail, name: toName || toEmail }],
       subject: subject,
       ...(isHtml ? { htmlContent: body } : { textContent: body })
@@ -100,9 +94,8 @@ app.post('/send', async (req, res) => {
   if (!process.env.BREVO_API_KEY) return res.status(500).json({ error: 'Brevo API key not configured' });
 
   const { recipients, subject, body, isHtml, campaignKey } = req.body;
-  const fromEmail = userEmail || 'me@gmail.com';
+  const fromEmail = userEmail || 'lincoln.tubayooperations@gmail.com';
 
-  // Filter duplicates
   const key = campaignKey || subject.trim().toLowerCase();
   if (!sentLog[key]) sentLog[key] = new Set();
 
@@ -115,7 +108,6 @@ app.post('/send', async (req, res) => {
 
   for (let i = 0; i < freshRecipients.length; i += BATCH_SIZE) {
     const batch = freshRecipients.slice(i, i + BATCH_SIZE);
-
     await Promise.all(batch.map(async (r) => {
       const personalBody = body.replace(/\{\{name\}\}/gi, r.name || r.email.split('@')[0]);
       try {
@@ -127,10 +119,7 @@ app.post('/send', async (req, res) => {
         failed++;
       }
     }));
-
-    if (i + BATCH_SIZE < freshRecipients.length) {
-      await sleep(DELAY_MS);
-    }
+    if (i + BATCH_SIZE < freshRecipients.length) await sleep(DELAY_MS);
   }
 
   res.json({ sent, failed, skipped, total: recipients.length });
