@@ -126,7 +126,23 @@
         <button onclick="insertHtml('<span style=\"color:#534AB7\">','</span>')">Color</button>
         <button onclick="insertHtml('<img src=\"\" style=\"max-width:100%\">','')">Image</button>
       </div>
-      <textarea id="body" placeholder="Write your email...&#10;&#10;Tip: use {{name}} to personalise with each recipient's name."></textarea>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <label style="margin:0">Message body</label>
+        <button onclick="insertName()" style="background:rgba(83,74,183,0.5);border:1px solid rgba(83,74,183,0.8);color:white;padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px;">
+          <i class="ti ti-user-plus" style="font-size:13px"></i> Insert {{name}}
+        </button>
+      </div>
+      <textarea id="body" oninput="onBodyInput(this)" placeholder="Write your email...&#10;&#10;Tip: use {{name}} to personalise with each recipient's name."></textarea>
+      <div id="nameHint" style="display:none;background:rgba(83,74,183,0.2);border:1px solid rgba(83,74,183,0.5);border-radius:6px;padding:8px 12px;margin-top:6px;font-size:12px;color:#CECBF6;">
+        <i class="ti ti-bulb" style="vertical-align:-2px;margin-right:5px;"></i>
+        <strong>Tip:</strong> You typed a name placeholder! Use <strong>{{name}}</strong> to personalise — each recipient will see their own name.
+      </div>
+      <div id="livePreview" style="display:none;margin-top:10px;border:1px solid rgba(255,255,255,0.15);border-radius:8px;overflow:hidden;">
+        <div style="background:rgba(255,255,255,0.08);padding:6px 12px;font-size:11px;color:rgba(255,255,255,0.4);display:flex;align-items:center;gap:6px;">
+          <i class="ti ti-eye" style="font-size:12px"></i> LIVE PREVIEW — how the first recipient will see it
+        </div>
+        <div id="previewContent" style="padding:12px;font-size:13px;color:rgba(255,255,255,0.8);white-space:pre-wrap;line-height:1.6;max-height:150px;overflow-y:auto;"></div>
+      </div>
       <p class="info-note"><i class="ti ti-info-circle" style="vertical-align:-2px;margin-right:4px;"></i>Use <strong style="color:white">{{name}}</strong> to insert each recipient's name automatically.</p>
     </div>
 
@@ -224,6 +240,43 @@ function toggleHtmlMode() {
   document.getElementById('body').placeholder = isHtml
     ? '<p>Hello {{name}},</p>\n<p>Your message here...</p>'
     : 'Write your email...\n\nTip: use {{name}} to personalise.';
+}
+
+function insertName() {
+  const ta = document.getElementById('body');
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  ta.value = ta.value.substring(0, start) + '{{name}}' + ta.value.substring(end);
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = start + 9;
+  onBodyInput(ta);
+}
+
+function onBodyInput(ta) {
+  const val = ta.value;
+  // Show hint if user typed {name} or {Name} but not {{name}}
+  const hint = document.getElementById('nameHint');
+  if (hint) {
+    const hasWrong = /\{name\}/i.test(val) && !/\{\{name\}\}/i.test(val);
+    hint.style.display = hasWrong ? 'block' : 'none';
+  }
+  updatePreview();
+}
+
+function updatePreview() {
+  const body = document.getElementById('body').value;
+  const preview = document.getElementById('livePreview');
+  const content = document.getElementById('previewContent');
+  if (!body.trim()) { if(preview) preview.style.display = 'none'; return; }
+  
+  // Get first recipient name for preview
+  const firstName = recipients.length > 0 
+    ? (recipients[0].name || recipients[0].email.split('@')[0]) 
+    : 'John';
+  
+  const personalised = body.replace(/\{\{name\}\}/gi, firstName);
+  if (preview) preview.style.display = 'block';
+  if (content) content.textContent = personalised;
 }
 
 function insertHtml(open, close) {
