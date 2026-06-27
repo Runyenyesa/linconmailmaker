@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const { google } = require('googleapis');
 const fs = require('fs');
+const https = require('https');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -16,10 +17,13 @@ const oauth2Client = new google.auth.OAuth2(
   client_id, client_secret, process.env.REDIRECT_URI || 'http://localhost:3000/auth/callback'
 );
 
+let userEmail = null;
 let userTokens = null;
 
-// Track sent emails per campaign: { campaignKey: Set of emails }
+// Track sent emails per campaign
 const sentLog = {};
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.get('/auth', (req, res) => {
   const authUrl = oauth2Client.generateAuthUrl({
@@ -38,32 +42,67 @@ app.get('/auth/callback', async (req, res) => {
   const { tokens } = await oauth2Client.getToken(code);
   oauth2Client.setCredentials(tokens);
   userTokens = tokens;
+
+  // Get user email
+  const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+  const { data } = await oauth2.userinfo.get();
+  userEmail = data.email;
+
   res.redirect('/?authed=true');
 });
 
 app.get('/auth/status', (req, res) => {
-  res.json({ authed: userTokens !== null });
+  res.json({ authed: userTokens !== null, email: userEmail });
 });
 
-// Check which emails already received a campaign
-app.post('/check-duplicates', (req, res) => {
-  const { campaignKey, emails } = req.body;
-  const alreadySent = sentLog[campaignKey] || new Set();
-  const duplicates = emails.filter(e => alreadySent.has(e.toLowerCase()));
-  const fresh = emails.filter(e => !alreadySent.has(e.toLowerCase()));
-  res.json({ duplicates: duplicates.length, fresh: fresh.length });
-});
+// Send via Brevo API
+function sendViaBrevo(toEmail, toName, fromEmail, subject, body, isHtml) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      sender: { name: fromEmail, email: fromEmail },
+      to: [{ email: toEmail, name: toName || toEmail }],
+      subject: subject,
+      ...(isHtml ? { htmlContent: body } : { textContent: body })
+    });
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    const options = {
+      hostname: 'api.brevo.com',
+      path: '/v3/smtp/email',
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(data);
+        } else {
+          reject(new Error(`Brevo error ${res.statusCode}: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
 
 app.post('/send', async (req, res) => {
   if (!userTokens) return res.status(401).json({ error: 'Not authenticated' });
+  if (!process.env.BREVO_API_KEY) return res.status(500).json({ error: 'Brevo API key not configured' });
 
   const { recipients, subject, body, isHtml, campaignKey } = req.body;
-  oauth2Client.setCredentials(userTokens);
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const fromEmail = userEmail || 'me@gmail.com';
 
-  // Filter out duplicates
+  // Filter duplicates
   const key = campaignKey || subject.trim().toLowerCase();
   if (!sentLog[key]) sentLog[key] = new Set();
 
@@ -72,38 +111,23 @@ app.post('/send', async (req, res) => {
 
   let sent = 0, failed = 0;
   const BATCH_SIZE = 10;
-  const DELAY_MS = 1500;
+  const DELAY_MS = 1000;
 
   for (let i = 0; i < freshRecipients.length; i += BATCH_SIZE) {
     const batch = freshRecipients.slice(i, i + BATCH_SIZE);
 
     await Promise.all(batch.map(async (r) => {
-      const personalBody = body.replace(/\{\{name\}\}/gi, r.name || r.email);
-      const contentType = isHtml ? 'text/html' : 'text/plain';
-      const messageParts = [
-        `To: ${r.email}`,
-        `Subject: ${subject}`,
-        `MIME-Version: 1.0`,
-        `Content-Type: ${contentType}; charset=UTF-8`,
-        ``,
-        personalBody
-      ];
-      const message = messageParts.join('\r\n');
-      const encoded = Buffer.from(message)
-        .toString('base64')
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
+      const personalBody = body.replace(/\{\{name\}\}/gi, r.name || r.email.split('@')[0]);
       try {
-        await gmail.users.messages.send({ userId: 'me', requestBody: { raw: encoded } });
+        await sendViaBrevo(r.email, r.name, fromEmail, subject, personalBody, isHtml);
         sentLog[key].add(r.email.toLowerCase());
         sent++;
       } catch (e) {
+        console.error(`Failed to send to ${r.email}:`, e.message);
         failed++;
       }
     }));
 
-    // Wait between batches to avoid Gmail rate limiting
     if (i + BATCH_SIZE < freshRecipients.length) {
       await sleep(DELAY_MS);
     }
